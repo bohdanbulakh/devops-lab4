@@ -1,0 +1,221 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+env:
+  DOCKER_NAMESPACE: bohdanbulakh
+  IMAGE_TAG: 1.0.${{ github.run_number }}
+
+jobs:
+  build-com-control:
+    name: Build Communication Control (.NET)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish
+        working-directory: src/CommunicationControl
+        run: |
+          dotnet publish -c Release \
+            -p:PublishProfile=FolderProfile \
+            -o ./published \
+            DevOpsProject/DevOpsProject.CommunicationControl.API.csproj
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: com-control-published
+          path: src/CommunicationControl/published
+          retention-days: 1
+
+  build-map-client:
+    name: Build Map Client (Vite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/MapClient/package-lock.json
+
+      - name: Install & build
+        working-directory: src/MapClient
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: map-client-dist
+          path: src/MapClient/dist
+          retention-days: 1
+
+  docker-com-control:
+    name: Docker · communication-control
+    runs-on: ubuntu-latest
+    needs: build-com-control
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download .NET artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: com-control-published
+          path: src/CommunicationControl/published
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push (DEV)
+        if: github.ref == 'refs/heads/dev'
+        uses: docker/build-push-action@v7
+        with:
+          context: src/CommunicationControl
+          file: src/CommunicationControl/DevOpsProject/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.DOCKER_NAMESPACE }}/communication-control:dev-${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_NAMESPACE }}/communication-control:dev
+
+      - name: Build & push (PROD)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: src/CommunicationControl
+          file: src/CommunicationControl/DevOpsProject/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.DOCKER_NAMESPACE }}/communication-control:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_NAMESPACE }}/communication-control:latest
+
+  docker-map-client:
+    name: Docker · map-client
+    runs-on: ubuntu-latest
+    needs: build-map-client
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: map-client-dist
+          path: src/MapClient/dist
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build & push (DEV)
+        if: github.ref == 'refs/heads/dev'
+        uses: docker/build-push-action@v7
+        with:
+          context: src/MapClient
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.DOCKER_NAMESPACE }}/communication-control-web:dev-${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_NAMESPACE }}/communication-control-web:dev
+
+      - name: Build & push (PROD)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: src/MapClient
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.DOCKER_NAMESPACE }}/communication-control-web:${{ env.IMAGE_TAG }}
+            ${{ env.DOCKER_NAMESPACE }}/communication-control-web:latest
+
+  deploy-dev:
+    name: Deploy → DEV
+    runs-on: ubuntu-latest
+    needs: [docker-com-control, docker-map-client]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'
+    environment: dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.DEV_VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy compose & config
+        run: |
+          scp -i ~/.ssh/id_rsa \
+            deployment/docker-compose.yaml \
+            deployment/config.json \
+            ${{ secrets.DEV_VPS_USER }}@${{ secrets.DEV_VPS_HOST }}:~/
+
+      - name: Pull images & restart stack
+        run: |
+          ssh -i ~/.ssh/id_rsa \
+            ${{ secrets.DEV_VPS_USER }}@${{ secrets.DEV_VPS_HOST }} \
+            "export IMAGE_TAG=dev-${{ env.IMAGE_TAG }} && \
+             docker compose pull && \
+             docker compose up -d"
+
+  deploy-prod:
+    name: Deploy → PROD
+    runs-on: ubuntu-latest
+    needs: [docker-com-control, docker-map-client]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.PROD_VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy compose & config
+        run: |
+          scp -i ~/.ssh/id_rsa \
+            deployment/docker-compose.yaml \
+            deployment/config.json \
+            ${{ secrets.PROD_VPS_USER }}@${{ secrets.PROD_VPS_HOST }}:~/
+
+      - name: Pull images & restart stack
+        run: |
+          ssh -i ~/.ssh/id_rsa \
+            ${{ secrets.PROD_VPS_USER }}@${{ secrets.PROD_VPS_HOST }} \
+            "export IMAGE_TAG=${{ env.IMAGE_TAG }} && \
+             docker compose pull && \
+             docker compose up -d"
