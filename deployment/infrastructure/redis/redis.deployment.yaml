@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: redis
-          image: registry.k8s.io/redis
+          image: redis:7
           resources:
             requests:
               cpu: 100m

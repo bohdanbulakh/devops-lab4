@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: com-control
-          image: registry.gitlab.com/kzotkin/hiveemulator/communication-control:latest
+          image: bohdanbulakh/communication-control:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
@@ -31,5 +31,3 @@ spec:
               value: redis:6379
             - name: BasePath
               value: /control
-      imagePullSecrets:
-        - name: gitlab-registry-secret

@@ -2,7 +2,6 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: map-client
-  namespace: default
   labels:
     app: map-client
 spec:
@@ -17,7 +16,7 @@ spec:
     spec:
       containers:
         - name: map-client
-          image: registry.gitlab.com/kzotkin/hiveemulator/map-client:latest
+          image: bohdanbulakh/communication-control-web:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 80
@@ -36,5 +35,3 @@ spec:
         - name: config-volume
           configMap:
             name: map-client-config
-      imagePullSecrets:
-        - name: gitlab-registry-secret
