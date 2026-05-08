@@ -179,6 +179,11 @@ jobs:
           scp -i ~/.ssh/id_rsa \
             deployment/docker-compose.yaml \
             deployment/config.json \
+            deployment/promtail-config.yaml \
+            deployment/prometheus.yml \
+            ${{ secrets.DEV_VPS_USER }}@${{ secrets.DEV_VPS_HOST }}:~/
+          scp -r -i ~/.ssh/id_rsa \
+            deployment/grafana \
             ${{ secrets.DEV_VPS_USER }}@${{ secrets.DEV_VPS_HOST }}:~/
 
       - name: Pull images & restart stack
@@ -210,6 +215,11 @@ jobs:
           scp -i ~/.ssh/id_rsa \
             deployment/docker-compose.yaml \
             deployment/config.json \
+            deployment/promtail-config.yaml \
+            deployment/prometheus.yml \
+            ${{ secrets.PROD_VPS_USER }}@${{ secrets.PROD_VPS_HOST }}:~/
+          scp -r -i ~/.ssh/id_rsa \
+            deployment/grafana \
             ${{ secrets.PROD_VPS_USER }}@${{ secrets.PROD_VPS_HOST }}:~/
 
       - name: Pull images & restart stack
