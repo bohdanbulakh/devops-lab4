@@ -229,3 +229,43 @@ jobs:
             "export IMAGE_TAG=${{ env.IMAGE_TAG }} && \
              docker compose pull && \
              docker compose up -d"
+
+  deploy-k8s:
+    name: Deploy → Kubernetes
+    runs-on: ubuntu-latest
+    needs: [docker-com-control, docker-map-client]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: kubernetes
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v5
+        with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+
+      - name: Deploy infrastructure
+        run: |
+          kubectl apply -f deployment/infrastructure/redis/
+
+      - name: Deploy application
+        run: |
+          kubectl apply -f deployment/app/communication-control/
+          kubectl apply -f deployment/app/map-client/
+
+      - name: Apply ingress
+        run: |
+          kubectl apply -f deployment/infrastructure/ingress/
+
+      - name: Rollout restart
+        run: |
+          kubectl rollout restart deployment/com-control
+          kubectl rollout restart deployment/map-client
+          kubectl rollout status deployment/com-control --timeout=120s
+          kubectl rollout status deployment/map-client --timeout=120s
